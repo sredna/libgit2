@@ -54,6 +54,13 @@ v0.24 + 1
 
 ### Breaking API changes
 
+* `git_odb_backend` now has a `freshen` function pointer.  This optional
+  function pointer is similar to the `exists` function, but it will update
+  a last-used marker.  For filesystem-based object databases, this updates
+  the timestamp of the file containing the object, to indicate "freshness".
+  If this is `NULL`, then it will not be called and the `exists` function
+  will be used instead.
+
 v0.24
 -------
 
