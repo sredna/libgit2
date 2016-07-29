@@ -85,8 +85,12 @@ static int git_sysdir_guess_template_dirs(git_buf *out)
 
 typedef int (*git_sysdir_guess_cb)(git_buf *out);
 
-static git_buf git_sysdir__dirs[GIT_SYSDIR__MAX] =
-	{ GIT_BUF_INIT, GIT_BUF_INIT, GIT_BUF_INIT, GIT_BUF_INIT, GIT_BUF_INIT };
+struct git_sysdir__dir {
+	int initialized;
+	git_buf buf;
+};
+
+static struct git_sysdir__dir git_sysdir__dirs[GIT_SYSDIR__MAX];
 
 static git_sysdir_guess_cb git_sysdir__dir_guess[GIT_SYSDIR__MAX] = {
 	git_sysdir_guess_system_dirs,
@@ -104,6 +108,9 @@ int git_sysdir_global_init(void)
 	const git_buf *path;
 	int error = 0;
 
+	for (i = 0; i < GIT_SYSDIR__MAX; ++i)
+		git_buf_init(&git_sysdir__dirs[i].buf, 0);
+
 	for (i = 0; !error && i < GIT_SYSDIR__MAX; i++)
 		error = git_sysdir_get(&path, i);
 
@@ -114,7 +121,7 @@ void git_sysdir_global_shutdown(void)
 {
 	int i;
 	for (i = 0; i < GIT_SYSDIR__MAX; ++i)
-		git_buf_free(&git_sysdir__dirs[i]);
+		git_buf_free(&git_sysdir__dirs[i].buf);
 
 	git_sysdir__dirs_shutdown_set = 0;
 }
@@ -137,7 +144,7 @@ int git_sysdir_get(const git_buf **out, git_sysdir_t which)
 
 	GITERR_CHECK_ERROR(git_sysdir_check_selector(which));
 
-	if (!git_buf_len(&git_sysdir__dirs[which])) {
+	if (!git_sysdir__dirs[which].initialized) {
 		/* prepare shutdown if we're going to need it */
 		if (!git_sysdir__dirs_shutdown_set) {
 			git__on_shutdown(git_sysdir_global_shutdown);
@@ -145,10 +152,12 @@ int git_sysdir_get(const git_buf **out, git_sysdir_t which)
 		}
 
 		GITERR_CHECK_ERROR(
-			git_sysdir__dir_guess[which](&git_sysdir__dirs[which]));
+			git_sysdir__dir_guess[which](&git_sysdir__dirs[which].buf));
+
+		git_sysdir__dirs[which].initialized = 1;
 	}
 
-	*out = &git_sysdir__dirs[which];
+	*out = &git_sysdir__dirs[which].buf;
 	return 0;
 }
 
@@ -185,29 +194,35 @@ int git_sysdir_set(git_sysdir_t which, const char *search_path)
 
 	/* init with default if not yet done and needed (ignoring error) */
 	if ((!search_path || expand_path) &&
-		!git_buf_len(&git_sysdir__dirs[which]))
-		git_sysdir__dir_guess[which](&git_sysdir__dirs[which]);
+		!git_sysdir__dirs[which].initialized)
+		git_sysdir__dir_guess[which](&git_sysdir__dirs[which].buf);
 
 	/* if $PATH is not referenced, then just set the path */
-	if (!expand_path)
-		return git_buf_sets(&git_sysdir__dirs[which], search_path);
+	if (!expand_path) {
+		git_sysdir__dirs[which].initialized = !!search_path;
+		return git_buf_sets(&git_sysdir__dirs[which].buf, search_path);
+	}
 
 	/* otherwise set to join(before $PATH, old value, after $PATH) */
 	if (expand_path > search_path)
 		git_buf_set(&merge, search_path, expand_path - search_path);
 
-	if (git_buf_len(&git_sysdir__dirs[which]))
+	if (git_buf_len(&git_sysdir__dirs[which].buf))
 		git_buf_join(&merge, GIT_PATH_LIST_SEPARATOR,
-			merge.ptr, git_sysdir__dirs[which].ptr);
+			merge.ptr, git_sysdir__dirs[which].buf.ptr);
 
 	expand_path += strlen(PATH_MAGIC);
 	if (*expand_path)
 		git_buf_join(&merge, GIT_PATH_LIST_SEPARATOR, merge.ptr, expand_path);
 
-	git_buf_swap(&git_sysdir__dirs[which], &merge);
+	git_buf_swap(&git_sysdir__dirs[which].buf, &merge);
 	git_buf_free(&merge);
 
-	return git_buf_oom(&git_sysdir__dirs[which]) ? -1 : 0;
+	if (git_buf_oom(&git_sysdir__dirs[which].buf))
+		return -1;
+
+	git_sysdir__dirs[which].initialized = 1;
+	return 0;
 }
 
 static int git_sysdir_find_in_dirlist(
